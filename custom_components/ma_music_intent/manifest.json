@@ -1,0 +1,11 @@
+{
+  "domain": "ma_music_intent",
+  "name": "MA Music Intent",
+  "version": "0.1.0",
+  "documentation": "https://github.com/neqq3/ma_music_intent",
+  "issue_tracker": "https://github.com/neqq3/ma_music_intent/issues",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "requirements": [],
+  "codeowners": ["@neqq3"]
+}

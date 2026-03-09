@@ -1,0 +1,38 @@
+﻿build_queue:
+  name: Build queue
+  description: Build a Music Assistant queue from a natural-language music prompt.
+  fields:
+    prompt:
+      name: Prompt
+      description: Natural-language music request.
+      required: true
+      example: 给我来 30 首适合晚上写代码的歌，中文优先，别太吵。
+      selector:
+        text:
+          multiline: true
+    target_player:
+      name: Target player
+      description: Optional player entity_id to queue playback on.
+      example: media_player.living_room
+      selector:
+        entity:
+          domain: media_player
+    count:
+      name: Count
+      description: Optional target number of tracks.
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: box
+    mode:
+      name: Mode
+      description: Strategy preference.
+      default: auto
+      selector:
+        select:
+          options:
+            - auto
+            - ai
+            - collaborative

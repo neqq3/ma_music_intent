@@ -2,12 +2,15 @@
 
 import voluptuous as vol
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_MODE
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
 from .const import DEFAULT_MODE, DOMAIN, SERVICE_BUILD_QUEUE
 from .service import MusicIntentService
+
+DATA_SERVICE_REGISTERED = "service_registered"
 
 SERVICE_SCHEMA = vol.Schema(
     {
@@ -20,6 +23,24 @@ SERVICE_SCHEMA = vol.Schema(
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    await _async_register_services(hass)
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    await _async_register_services(hass)
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    return True
+
+
+async def _async_register_services(hass: HomeAssistant) -> None:
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    if domain_data.get(DATA_SERVICE_REGISTERED):
+        return
+
     service = MusicIntentService()
 
     async def handle_build_queue(call: ServiceCall) -> dict[str, object]:
@@ -39,4 +60,4 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         schema=SERVICE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
-    return True
+    domain_data[DATA_SERVICE_REGISTERED] = True

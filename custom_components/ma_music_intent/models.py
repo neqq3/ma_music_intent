@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -7,6 +7,7 @@ from typing import Any
 @dataclass(slots=True)
 class MusicIntent:
     prompt: str
+    query: str
     count: int
     mode: str
     target_player: str | None = None
@@ -42,6 +43,8 @@ class CandidateTrack:
     name: str
     artist: str | None = None
     uri: str | None = None
+    item_id: str | None = None
+    media_type: str = "track"
     provider: str | None = None
     available: bool = True
     score: float = 0.0
@@ -65,3 +68,4 @@ class QueueBuildResult:
     executed: bool
     message: str
     raw_candidates: int
+    debug: dict[str, Any] = field(default_factory=dict)

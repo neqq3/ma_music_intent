@@ -1,0 +1,13 @@
+{
+  "config": {
+    "abort": {
+      "single_instance_allowed": "Only a single MA Music Intent configuration is allowed."
+    },
+    "step": {
+      "user": {
+        "title": "Set up MA Music Intent",
+        "description": "Add MA Music Intent to register its Home Assistant services."
+      }
+    }
+  }
+}

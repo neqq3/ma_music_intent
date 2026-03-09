@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
 
@@ -32,7 +32,7 @@ class MusicIntentService:
         intent = await self._parser.parse(prompt, count=count, target_player=target_player, mode=mode)
         environment = await self._environment_analyzer.analyze(hass)
         plan = self._planner.build_plan(intent, environment)
-        candidates = await self._candidate_builder.build(hass, intent, environment, plan)
+        candidates, search_debug = await self._candidate_builder.build(hass, intent, environment, plan)
         arranged = self._arranger.arrange(candidates, intent)
         result = QueueBuildResult(
             matched_tracks=arranged,
@@ -42,6 +42,7 @@ class MusicIntentService:
             executed=False,
             message="Queue preview built.",
             raw_candidates=len(candidates),
+            debug={"search": search_debug},
         )
         result = await self._executor.execute(hass, result)
         return self._serialize_result(result)
@@ -59,7 +60,9 @@ class MusicIntentService:
                 {
                     "name": track.name,
                     "artist": track.artist,
+                    "item_id": track.item_id,
                     "uri": track.uri,
+                    "media_type": track.media_type,
                     "provider": track.provider,
                     "score": track.score,
                     "available": track.available,
@@ -68,6 +71,7 @@ class MusicIntentService:
             ],
             "intent": {
                 "prompt": result.intent.prompt,
+                "query": result.intent.query,
                 "count": result.intent.count,
                 "mode": result.intent.mode,
                 "target_player": result.intent.target_player,
@@ -81,6 +85,7 @@ class MusicIntentService:
                 "allow_external_discovery": result.intent.allow_external_discovery,
                 "source_scope": result.intent.source_scope,
             },
+            "debug": result.debug,
             "environment": {
                 "music_assistant_domain": result.environment.music_assistant_domain,
                 "has_recommendation_provider": result.environment.has_recommendation_provider,

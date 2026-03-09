@@ -1,12 +1,16 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
-from collections.abc import Iterable
-from typing import Any
+import logging
 
 from homeassistant.core import HomeAssistant
 
+from homeassistant.config_entries import ConfigEntry
+
 from .const import MAX_CANDIDATES
 from .models import CandidateTrack, EnvironmentSnapshot, ExecutionPlan, MusicIntent, ProviderSnapshot
+from .search_normalizer import normalize_search_result, summarize_search_payload
+
+LOGGER = logging.getLogger(__name__)
 
 
 class CandidateBuilder:
@@ -16,22 +20,25 @@ class CandidateBuilder:
         intent: MusicIntent,
         environment: EnvironmentSnapshot,
         plan: ExecutionPlan,
-    ) -> list[CandidateTrack]:
+    ) -> tuple[list[CandidateTrack], list[dict[str, object]]]:
         provider = self._resolve_search_provider(environment, plan)
         if provider is None:
-            return self._build_dry_run_candidates(intent)
+            return self._build_dry_run_candidates(intent), []
 
         queries = self._build_queries(intent)
         candidates: list[CandidateTrack] = []
+        debug_rows: list[dict[str, object]] = []
         for query in queries:
-            results = await self._search(hass, provider.domain, query)
-            candidates.extend(results)
+            results, debug_row = await self._search(hass, provider.domain, query)
+            debug_rows.append(debug_row)
+            playable_results = [row for row in results if row.available and (row.uri or row.item_id)]
+            candidates.extend(playable_results)
             if len(candidates) >= MAX_CANDIDATES:
                 break
 
         if candidates:
-            return candidates[:MAX_CANDIDATES]
-        return self._build_dry_run_candidates(intent)
+            return candidates[:MAX_CANDIDATES], debug_rows
+        return self._build_dry_run_candidates(intent), debug_rows
 
     def _resolve_search_provider(
         self,
@@ -50,12 +57,7 @@ class CandidateBuilder:
         return None
 
     def _build_queries(self, intent: MusicIntent) -> list[str]:
-        queries: list[str] = []
-        queries.extend(intent.seed_tracks)
-        queries.extend(intent.seed_artists)
-        queries.extend(intent.keywords)
-        if intent.prompt not in queries:
-            queries.append(intent.prompt)
+        queries: list[str] = [intent.query]
         seen: set[str] = set()
         deduped: list[str] = []
         for query in queries:
@@ -64,74 +66,62 @@ class CandidateBuilder:
                 continue
             seen.add(normalized)
             deduped.append(normalized)
-        return deduped[:12]
+        return deduped[:1]
 
-    async def _search(self, hass: HomeAssistant, domain: str, query: str) -> list[CandidateTrack]:
+    def _resolve_music_assistant_entry(self, hass: HomeAssistant, domain: str) -> ConfigEntry | None:
+        entries = hass.config_entries.async_entries(domain)
+        if entries:
+            return entries[0]
+        if domain != "music_assistant":
+            fallback_entries = hass.config_entries.async_entries("music_assistant")
+            if fallback_entries:
+                return fallback_entries[0]
+        return None
+
+    async def _search(self, hass: HomeAssistant, domain: str, query: str) -> tuple[list[CandidateTrack], dict[str, object]]:
+        search_payload = {"name": query, "media_type": "track", "limit": 10}
+        config_entry = self._resolve_music_assistant_entry(hass, domain)
+        if config_entry is not None:
+            search_payload["config_entry_id"] = config_entry.entry_id
         try:
             response = await hass.services.async_call(
                 domain,
                 "search",
-                {"query": query, "media_type": "track", "limit": 10},
+                search_payload,
                 blocking=True,
                 return_response=True,
             )
-        except Exception:
-            return []
-        return self._normalize_search_response(response, provider=domain, query=query)
+        except Exception as err:
+            LOGGER.exception("Music Assistant search failed for query=%s via domain=%s", query, domain)
+            return [], {"query": query, "provider_domain": domain, "search_payload": search_payload, "error": str(err)}
 
-    def _normalize_search_response(self, response: Any, *, provider: str, query: str) -> list[CandidateTrack]:
-        rows = list(self._extract_rows(response))
-        candidates: list[CandidateTrack] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            name = row.get("name") or row.get("title") or query
-            artist = self._extract_artist(row)
-            uri = row.get("uri") or row.get("item_id") or row.get("id")
-            available = row.get("available", True)
-            score = float(row.get("score") or row.get("confidence") or 0.0)
-            candidates.append(
-                CandidateTrack(
-                    name=str(name),
-                    artist=artist,
-                    uri=str(uri) if uri is not None else None,
-                    provider=provider,
-                    available=bool(available),
-                    score=score,
-                    metadata=row,
-                )
-            )
-        return candidates
-
-    def _extract_rows(self, response: Any) -> Iterable[Any]:
-        if response is None:
-            return []
-        if isinstance(response, list):
-            return response
-        if isinstance(response, dict):
-            for key in ("items", "tracks", "result", "results"):
-                value = response.get(key)
-                if isinstance(value, list):
-                    return value
-            nested = response.get("tracks")
-            if isinstance(nested, dict):
-                items = nested.get("items")
-                if isinstance(items, list):
-                    return items
-        return []
-
-    def _extract_artist(self, row: dict[str, Any]) -> str | None:
-        artists = row.get("artists")
-        if isinstance(artists, list) and artists:
-            first = artists[0]
-            if isinstance(first, dict):
-                return str(first.get("name")) if first.get("name") else None
-            return str(first)
-        artist = row.get("artist")
-        return str(artist) if artist else None
+        LOGGER.debug("Music Assistant search raw response for query=%s via %s: %r", query, domain, response)
+        normalized = normalize_search_result(response, provider_domain=domain, fallback_query=query)
+        debug_row = {
+            "query": query,
+            "provider_domain": domain,
+            "search_payload": search_payload,
+            "raw_response_summary": summarize_search_payload(response),
+            "raw_response": response,
+            "normalized_tracks": [
+                {
+                    "name": track.name,
+                    "artist": track.artist,
+                    "provider": track.provider,
+                    "item_id": track.item_id,
+                    "uri": track.uri,
+                    "media_type": track.media_type,
+                    "available": track.available,
+                }
+                for track in normalized
+            ],
+            "playable_count": len([track for track in normalized if track.available and (track.uri or track.item_id)]),
+        }
+        LOGGER.debug("Music Assistant search normalized tracks for query=%s: %s", query, debug_row["normalized_tracks"])
+        return normalized, debug_row
 
     def _build_dry_run_candidates(self, intent: MusicIntent) -> list[CandidateTrack]:
-        labels = intent.seed_artists or intent.keywords or [intent.prompt]
+        labels = [intent.query]
         candidates: list[CandidateTrack] = []
         for index, label in enumerate(labels[: intent.count], start=1):
             candidates.append(
@@ -139,6 +129,8 @@ class CandidateBuilder:
                     name=f"Intent Seed {index}: {label}",
                     artist=None,
                     uri=None,
+                    item_id=None,
+                    media_type="track",
                     provider="dry_run",
                     available=False,
                     score=max(0.0, 1 - index * 0.05),

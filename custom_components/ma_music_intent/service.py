@@ -5,6 +5,7 @@ from homeassistant.core import HomeAssistant
 
 from .arranger import Arranger
 from .candidate_builder import CandidateBuilder
+from .curation import CandidateCurator
 from .environment_analyzer import EnvironmentAnalyzer
 from .execution_planner import ExecutionPlanner
 from .intent_parser import IntentParser
@@ -18,6 +19,7 @@ class MusicIntentService:
         self._environment_analyzer = EnvironmentAnalyzer()
         self._planner = ExecutionPlanner()
         self._candidate_builder = CandidateBuilder()
+        self._curator = CandidateCurator()
         self._arranger = Arranger()
         self._executor = MAExecutor()
 
@@ -29,6 +31,7 @@ class MusicIntentService:
         count: int | None,
         target_player: str | None,
         mode: str | None,
+        curation_mode: str | None,
     ) -> dict[str, object]:
         environment = await self._environment_analyzer.analyze(hass)
         intent, parser_debug = await self._parser.parse(
@@ -39,9 +42,18 @@ class MusicIntentService:
             target_player=target_player,
             mode=mode,
         )
+        if curation_mode:
+            intent.curation_mode = curation_mode
         plan = self._planner.build_plan(intent, environment)
         candidates, search_debug = await self._candidate_builder.build(hass, intent, environment, plan)
-        arranged = self._arranger.arrange(candidates, intent)
+        curated_candidates, curation_debug = await self._curator.curate(
+            hass,
+            intent=intent,
+            candidates=candidates,
+            agent_id=parser_debug.get("agent_id"),
+            mode=intent.curation_mode,
+        )
+        arranged = self._arranger.arrange(curated_candidates, intent)
         result = QueueBuildResult(
             matched_tracks=arranged,
             plan=plan,
@@ -50,7 +62,7 @@ class MusicIntentService:
             executed=False,
             message="Queue preview built.",
             raw_candidates=len(candidates),
-            debug={"parser": parser_debug, "search": search_debug},
+            debug={"parser": parser_debug, "search": search_debug, "curation": curation_debug},
         )
         result = await self._executor.execute(hass, result)
         return self._serialize_result(hass, result)
@@ -86,6 +98,7 @@ class MusicIntentService:
                 "query": result.intent.query,
                 "count": result.intent.count,
                 "mode": result.intent.mode,
+                "curation_mode": result.intent.curation_mode,
                 "target_player": result.intent.target_player,
                 "parse_source": result.intent.parse_source,
                 "source_scope": result.intent.source_scope,

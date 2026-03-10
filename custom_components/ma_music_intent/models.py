@@ -16,6 +16,7 @@ class MusicIntent:
     query: str
     count: int
     mode: str
+    curation_mode: str = "off"
     target_player: str | None = None
     source_scope: str = "auto"
     allow_external_discovery: bool = True

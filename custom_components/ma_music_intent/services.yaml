@@ -1,4 +1,4 @@
-﻿build_queue:
+build_queue:
   name: Build queue
   description: Build a Music Assistant queue from a natural-language music prompt.
   fields:
@@ -36,3 +36,13 @@
             - auto
             - ai
             - collaborative
+    curation_mode:
+      name: Curation mode
+      description: Optional AI review layer applied after provider matching and before arranging.
+      default: "off"
+      selector:
+        select:
+          options:
+            - "off"
+            - "light"
+            - "strong"

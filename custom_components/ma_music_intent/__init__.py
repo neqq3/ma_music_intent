@@ -7,7 +7,7 @@ from homeassistant.const import CONF_MODE
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
-from .const import DEFAULT_MODE, DOMAIN, SERVICE_BUILD_QUEUE
+from .const import DEFAULT_CURATION_MODE, DEFAULT_MODE, DOMAIN, SERVICE_BUILD_QUEUE, SUPPORTED_CURATION_MODES
 from .service import MusicIntentService
 
 DATA_SERVICE_REGISTERED = "service_registered"
@@ -18,6 +18,7 @@ SERVICE_SCHEMA = vol.Schema(
         vol.Optional("count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100)),
         vol.Optional("target_player"): cv.string,
         vol.Optional(CONF_MODE, default=DEFAULT_MODE): cv.string,
+        vol.Optional("curation_mode", default=DEFAULT_CURATION_MODE): vol.In(SUPPORTED_CURATION_MODES),
     }
 )
 
@@ -51,6 +52,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             count=data.get("count"),
             target_player=data.get("target_player"),
             mode=data.get(CONF_MODE),
+            curation_mode=data.get("curation_mode"),
         )
 
     hass.services.async_register(

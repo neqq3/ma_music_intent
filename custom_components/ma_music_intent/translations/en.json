@@ -13,12 +13,15 @@
       "step": {
         "init": {
           "title": "AI Agent",
-          "description": "Use Home Assistant default conversation agent by default, or enable a dedicated agent for this integration."
+          "description": "By default this integration inherits the Assist preferred conversation agent. Enable the override only if you want this integration to always use a specific agent."
         }
       },
       "data": {
-        "use_custom_agent": "Use dedicated conversation agent",
-        "agent_id": "Conversation agent"
+        "use_custom_agent": "Override Assist default agent",
+        "agent_id": "Dedicated conversation agent"
+      },
+      "error": {
+        "required": "Select a conversation agent."
       }
     }
   }

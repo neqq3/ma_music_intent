@@ -6,3 +6,6 @@ SUPPORTED_MODES = {"auto", "ai", "collaborative"}
 DEFAULT_TARGET_DURATION_MINUTES = 60
 MUSIC_ASSISTANT_CANDIDATE_DOMAINS = ("music_assistant", "mass")
 MAX_CANDIDATES = 100
+
+CONF_AGENT_ID = "agent_id"
+CONF_USE_CUSTOM_AGENT = "use_custom_agent"

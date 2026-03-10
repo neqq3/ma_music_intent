@@ -26,30 +26,39 @@ class MAExecutor:
             return result
 
         playable_track = playable_tracks[0]
-        media_id = self._build_media_id(playable_track)
-        if media_id is None:
+        media_ids = [media_id for track in playable_tracks if (media_id := self._build_media_id(track)) is not None]
+        if not media_ids:
             result.executed = False
             result.message = "No playable identifier could be built from the matched track."
             result.debug["playback_payload"] = None
             return result
 
-        payload = {
+        playback_payload = {
             "entity_id": target_player,
-            "media_id": media_id,
+            "media_id": media_ids if len(media_ids) > 1 else media_ids[0],
             "enqueue": "replace",
         }
-        result.debug["playback_payload"] = payload
-        LOGGER.debug("Music Assistant play_media payload: %s", payload)
+        result.debug["playback_payload"] = playback_payload
+        LOGGER.debug("Music Assistant play_media payload: %s", playback_payload)
 
         try:
-            await hass.services.async_call(domain, "play_media", payload, blocking=True)
-            result.executed = True
-            result.message = f"Started playback on {target_player} using {playable_track.name}."
-            return result
+            await hass.services.async_call(domain, "play_media", playback_payload, blocking=True)
         except Exception as err:
             result.executed = False
             result.message = f"Queue preview built, but play_media failed: {err}"
             return result
+
+        result.debug["queue_payloads"] = [
+            {"track": track.name, "queued_via": "play_media_batch"}
+            for track in playable_tracks[1:]
+        ]
+        result.executed = True
+        queued_count = max(0, len(media_ids) - 1)
+        if queued_count:
+            result.message = f"Started playback on {target_player} using {playable_track.name} and queued {queued_count} more tracks."
+        else:
+            result.message = f"Started playback on {target_player} using {playable_track.name}."
+        return result
 
     def _build_media_id(self, track: CandidateTrack) -> str | dict[str, str] | None:
         if track.uri:

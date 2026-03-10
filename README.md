@@ -1,16 +1,17 @@
 # MA Music Intent
 
-`ma_music_intent` is a Home Assistant custom integration that turns a natural-language music request into a Music Assistant queue preview, and will push that queue to a target player when playable track URIs are found.
+`ma_music_intent` is a Home Assistant custom integration that turns a complex natural-language music request into a temporary Music Assistant queue. It uses Home Assistant's configured AI conversation agent to understand intent, then lets an execution planner choose how to expand, search, blend, arrange, and play tracks in the current environment.
 
 ## Features
 
 - Exposes one service: `ma_music_intent.build_queue`
-- Parses a prompt into a small structured intent model
+- Reuses Home Assistant conversation / LLM agents instead of adding a separate model stack
+- Parses natural language into an execution-oriented music intent as an intermediate representation
 - Detects available Music Assistant service domains (`music_assistant` / `mass`)
-- Chooses a basic execution strategy
-- Searches for candidate tracks when a `search` service is available
-- Arranges and deduplicates candidates
-- Returns a structured response and optionally calls `play_media`
+- Chooses between recommendation expansion, search expansion, library-only degradation, or multi-provider blending
+- Builds a candidate pool from AI seeds, candidate hints, keywords, and provider-native expansion when available
+- Arranges and deduplicates candidates before playback
+- Pushes a playable queue to Music Assistant by starting playback and queueing additional tracks when possible
 
 ## Install
 
@@ -33,6 +34,7 @@ The service returns a response payload with:
 - `executed`: whether queue push was attempted successfully
 - `message`: outcome summary
 - `strategy`: selected execution strategy
+- `plan`: execution plan snapshot, including provider routes and queue constraints
 - `tracks`: arranged candidate track list
 - `intent`: parsed intent snapshot
 - `environment`: detected provider snapshot

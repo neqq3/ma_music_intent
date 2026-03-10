@@ -1,0 +1,28 @@
+{
+  "config": {
+    "abort": {
+      "single_instance_allowed": "只允许一个 MA Music Intent 配置。"
+    },
+    "step": {
+      "user": {
+        "title": "设置 MA Music Intent",
+        "description": "添加 MA Music Intent 以注册它的 Home Assistant 服务。"
+      }
+    },
+    "options": {
+      "step": {
+        "init": {
+          "title": "AI 代理",
+          "description": "默认继承 Assist 当前首选的对话代理。只有当你希望本集成始终固定使用某个代理时，才开启覆盖。"
+        }
+      },
+      "data": {
+        "use_custom_agent": "覆盖 Assist 默认代理",
+        "agent_id": "专用对话代理"
+      },
+      "error": {
+        "required": "请选择一个对话代理。"
+      }
+    }
+  }
+}

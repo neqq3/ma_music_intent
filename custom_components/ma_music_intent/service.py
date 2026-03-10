@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from homeassistant.components.assist_pipeline.pipeline import async_get_pipeline
 from homeassistant.core import HomeAssistant
 
 from .arranger import Arranger
@@ -52,12 +53,14 @@ class MusicIntentService:
             debug={"parser": parser_debug, "search": search_debug},
         )
         result = await self._executor.execute(hass, result)
-        return self._serialize_result(result)
+        return self._serialize_result(hass, result)
 
-    def _serialize_result(self, result: QueueBuildResult) -> dict[str, object]:
+    def _serialize_result(self, hass: HomeAssistant, result: QueueBuildResult) -> dict[str, object]:
+        ai_agent = self._serialize_ai_agent(hass, result.debug.get("parser", {}))
         return {
             "executed": result.executed,
             "message": result.message,
+            "ai_agent": ai_agent,
             "strategy": result.plan.strategy,
             "reason": result.plan.reason,
             "primary_provider": result.plan.primary_provider,
@@ -172,4 +175,38 @@ class MusicIntentService:
                     for provider in result.environment.providers
                 ],
             },
+        }
+
+    def _serialize_ai_agent(self, hass: HomeAssistant, parser_debug: dict[str, object]) -> dict[str, object]:
+        agent_id = parser_debug.get("agent_id")
+        resolved_from = "override"
+        configured_default = None
+        configured_default_name = None
+
+        try:
+            pipeline = async_get_pipeline(hass)
+            configured_default = pipeline.conversation_engine
+            configured_default_name = pipeline.name
+        except Exception:
+            pipeline = None
+
+        if not agent_id:
+            agent_id = configured_default
+            resolved_from = "assist_default_fallback"
+        elif agent_id == configured_default:
+            resolved_from = "assist_default"
+
+        label = None
+        if isinstance(agent_id, str):
+            state = hass.states.get(agent_id)
+            if state:
+                label = state.attributes.get("friendly_name") or state.name
+            label = label or agent_id
+
+        return {
+            "agent_id": agent_id,
+            "name": label,
+            "resolved_from": resolved_from,
+            "assist_default_agent_id": configured_default,
+            "assist_default_name": configured_default_name,
         }

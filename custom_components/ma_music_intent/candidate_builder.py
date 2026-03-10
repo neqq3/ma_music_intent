@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from collections.abc import Iterable
+import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -205,6 +207,7 @@ class CandidateBuilder:
             debug_rows.append(debug_row)
             for row in results:
                 row.metadata.setdefault("source_operation", source_label)
+                row.metadata.setdefault("query", normalized_query)
             candidates.extend(results)
             if len(candidates) >= MAX_CANDIDATES:
                 break
@@ -258,6 +261,19 @@ class CandidateBuilder:
         scored: list[CandidateTrack] = []
         preferred_artists = {artist.lower() for artist in intent.preferred_artists}
         avoided_artists = {artist.lower() for artist in plan.queue_constraints.avoided_artists}
+        candidate_track_keys = self._build_candidate_track_keys(provider_plan, intent)
+        candidate_track_title_groups = self._build_candidate_track_title_groups(provider_plan, intent)
+        seed_artist_keys = {artist.strip().lower() for artist in provider_plan.seed_artists if artist.strip()}
+        seed_track_keys = {track.strip().lower() for track in provider_plan.seed_tracks if track.strip()}
+        candidate_artist_keys = {artist.strip().lower() for artist in provider_plan.candidate_artists if artist.strip()}
+        query_counter = Counter(
+            normalized
+            for normalized in (
+                " ".join(query.strip().split()).lower()
+                for query in provider_plan.query_hints
+            )
+            if normalized
+        )
 
         for candidate in candidates:
             if not candidate.available or not (candidate.uri or candidate.item_id):
@@ -265,10 +281,31 @@ class CandidateBuilder:
 
             score = candidate.score
             artist_name = (candidate.artist or "").lower()
+            candidate_key = self._candidate_track_key(candidate.name, candidate.artist)
+            candidate_name_key = candidate.name.strip().lower()
+            canonical_title = self._canonical_track_title(candidate.name)
+            candidate.metadata["canonical_title"] = canonical_title
             if artist_name and artist_name in preferred_artists:
                 score += 0.3
             if artist_name and artist_name in avoided_artists:
                 score -= 0.7
+            if candidate_key in candidate_track_keys:
+                score += 1.1
+                candidate.metadata["intent_anchor"] = "candidate_track_exact"
+                candidate.metadata["intent_anchor_key"] = candidate_key
+            elif canonical_title and canonical_title in candidate_track_title_groups:
+                score += 0.75
+                candidate.metadata["intent_anchor"] = "candidate_track_title"
+                candidate.metadata["intent_anchor_key"] = canonical_title
+            elif candidate_name_key in seed_track_keys:
+                score += 0.45
+                candidate.metadata["intent_anchor"] = "seed_track_name"
+            elif artist_name and artist_name in candidate_artist_keys:
+                score += 0.25
+                candidate.metadata["intent_anchor"] = "candidate_artist"
+            elif artist_name and artist_name in seed_artist_keys:
+                score += 0.1
+                candidate.metadata["intent_anchor"] = "seed_artist"
 
             source_operation = str(candidate.metadata.get("source_operation") or "")
             if source_operation == "provider_expand":
@@ -277,6 +314,20 @@ class CandidateBuilder:
                 score += 0.15
             elif source_operation == "library":
                 score += 0.05
+
+            query_key = str(candidate.metadata.get("query") or "").strip().lower()
+            if query_key:
+                if query_key in query_counter:
+                    score += min(0.18, 0.04 * query_counter[query_key])
+                if query_key in seed_artist_keys and candidate_key not in candidate_track_keys:
+                    score -= 0.2
+                if canonical_title and canonical_title in candidate_track_title_groups and query_key in seed_artist_keys:
+                    score -= 0.15
+
+            if canonical_title and canonical_title in candidate_track_title_groups:
+                if self._looks_like_derivative_version(candidate.name):
+                    score -= 0.45
+                    candidate.metadata["derivative_version"] = True
 
             if plan.allow_multi_source and candidate.provider:
                 score += min(0.2, provider_plan.target_share * 0.2)
@@ -320,12 +371,12 @@ class CandidateBuilder:
     def _build_seed_queries(self, provider_plan: ProviderPlan) -> list[str]:
         queries: list[str] = []
         queries.extend(provider_plan.seed_tracks)
-        queries.extend(provider_plan.seed_artists)
-        queries.extend(provider_plan.candidate_artists)
         queries.extend(
             f"{track.name} {track.artist}".strip() if track.artist else track.name
             for track in provider_plan.candidate_tracks
         )
+        queries.extend(provider_plan.seed_artists)
+        queries.extend(provider_plan.candidate_artists)
         seen: set[str] = set()
         deduped: list[str] = []
         for query in queries:
@@ -400,3 +451,54 @@ class CandidateBuilder:
             "available": track.available,
             "score": track.score,
         }
+
+    def _build_candidate_track_keys(
+        self,
+        provider_plan: ProviderPlan,
+        intent: MusicIntent,
+    ) -> set[str]:
+        keys: set[str] = set()
+        for track in [*intent.candidate_tracks, *provider_plan.candidate_tracks]:
+            key = self._candidate_track_key(track.name, track.artist)
+            if key:
+                keys.add(key)
+        return keys
+
+    def _build_candidate_track_title_groups(
+        self,
+        provider_plan: ProviderPlan,
+        intent: MusicIntent,
+    ) -> set[str]:
+        groups: set[str] = set()
+        for track in [*intent.candidate_tracks, *provider_plan.candidate_tracks]:
+            canonical_title = self._canonical_track_title(track.name)
+            if canonical_title:
+                groups.add(canonical_title)
+        return groups
+
+    def _candidate_track_key(self, name: str | None, artist: str | None) -> str | None:
+        normalized_name = (name or "").strip().lower()
+        if not normalized_name:
+            return None
+        normalized_artist = (artist or "").strip().lower()
+        return f"{normalized_name}::{normalized_artist}"
+
+    def _canonical_track_title(self, name: str | None) -> str | None:
+        normalized_name = (name or "").strip().lower()
+        if not normalized_name:
+            return None
+        normalized_name = re.sub(r"[\(\[（【].*?[\)\]）】]", "", normalized_name)
+        normalized_name = re.sub(
+            r"\b(remix|mix|edit|version|ver\.?|live|demo|cover|instrumental|伴奏|翻唱|纯音乐|钢琴版|吉他版)\b",
+            "",
+            normalized_name,
+        )
+        normalized_name = re.sub(r"\s+", " ", normalized_name).strip(" -_/")
+        return normalized_name or None
+
+    def _looks_like_derivative_version(self, name: str | None) -> bool:
+        normalized_name = (name or "").strip().lower()
+        if not normalized_name:
+            return False
+        derivative_tokens = ("remix", "mix", "edit", "version", "ver.", "live", "demo", "cover", "翻唱", "伴奏", "钢琴版", "吉他版")
+        return any(token in normalized_name for token in derivative_tokens)

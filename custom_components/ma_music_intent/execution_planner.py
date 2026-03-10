@@ -177,12 +177,6 @@ class ExecutionPlanner:
     def _pick_recommendation_service(self, capabilities: set[str]) -> str | None:
         if "recommendations" in capabilities:
             return "recommendations"
-        if "similar_tracks" in capabilities:
-            return "similar_tracks"
-        if "dynamic_tracks" in capabilities:
-            return "similar_tracks"
-        if "radio" in capabilities:
-            return "radio_mode"
         return None
 
     def _has_recommendation_seed_hints(self, intent: MusicIntent) -> bool:

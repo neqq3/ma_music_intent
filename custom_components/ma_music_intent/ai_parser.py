@@ -305,18 +305,16 @@ class AIIntentParser:
 
     def _extract_json_payload(self, response_dict: dict[str, Any]) -> dict[str, Any] | None:
         for response_text in self._collect_text_candidates(response_dict):
-            candidate = self._extract_json_object_text(response_text)
-            if candidate is None:
-                continue
-            try:
-                payload = json.loads(candidate)
-            except json.JSONDecodeError:
+            for candidate in self._extract_json_candidates(response_text):
                 try:
-                    payload = ast.literal_eval(candidate)
-                except (SyntaxError, ValueError):
-                    continue
-            if isinstance(payload, dict):
-                return payload
+                    payload = json.loads(candidate)
+                except json.JSONDecodeError:
+                    try:
+                        payload = ast.literal_eval(candidate)
+                    except (SyntaxError, ValueError):
+                        continue
+                if isinstance(payload, dict):
+                    return payload
         return None
 
     def _resolve_query(self, prompt: str, payload: dict[str, Any]) -> str:
@@ -427,6 +425,9 @@ class AIIntentParser:
             if isinstance(node, list):
                 for item in node:
                     visit(item)
+                return
+            if isinstance(node, str) and node.strip():
+                candidates.append(node.strip())
 
         visit(value)
         seen: set[str] = set()
@@ -438,18 +439,52 @@ class AIIntentParser:
             deduped.append(candidate)
         return deduped
 
-    def _extract_json_object_text(self, response_text: str) -> str | None:
-        fenced_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
-        if fenced_match:
-            return fenced_match.group(1)
+    def _extract_json_candidates(self, response_text: str) -> list[str]:
+        candidates: list[str] = []
 
+        for fenced_match in re.finditer(r"```(?:json|JSON)?\s*([\s\S]*?)\s*```", response_text):
+            block = fenced_match.group(1).strip()
+            if block:
+                candidates.append(block)
+                balanced = self._extract_balanced_json_object(block)
+                if balanced and balanced != block:
+                    candidates.append(balanced)
+
+        balanced_response = self._extract_balanced_json_object(response_text)
+        if balanced_response:
+            candidates.append(balanced_response)
+
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for candidate in candidates:
+            normalized = candidate.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+        return deduped
+
+    def _extract_balanced_json_object(self, response_text: str) -> str | None:
         start = response_text.find("{")
         if start == -1:
             return None
 
         depth = 0
+        in_string = False
+        escaped = False
         for index in range(start, len(response_text)):
             char = response_text[index]
+            if escaped:
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
             if char == "{":
                 depth += 1
             elif char == "}":

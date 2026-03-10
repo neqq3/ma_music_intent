@@ -25,50 +25,56 @@ class MAExecutor:
                 result.message = "Music Assistant service domain not detected; returning preview only."
             return result
 
-        playable_track = playable_tracks[0]
-        media_ids = [media_id for track in playable_tracks if (media_id := self._build_media_id(track)) is not None]
-        if not media_ids:
+        playable_payloads = [
+            payload for track in playable_tracks if (payload := self._build_play_media_payload(track, target_player)) is not None
+        ]
+        if not playable_payloads:
             result.executed = False
             result.message = "No playable identifier could be built from the matched track."
             result.debug["playback_payload"] = None
             return result
 
-        playback_payload = {
-            "entity_id": target_player,
-            "media_id": media_ids if len(media_ids) > 1 else media_ids[0],
-            "enqueue": "replace",
-        }
-        result.debug["playback_payload"] = playback_payload
-        LOGGER.debug("Music Assistant play_media payload: %s", playback_payload)
+        first_payload = {**playable_payloads[0], "enqueue": "replace"}
+        queue_payloads = [{**payload, "enqueue": "add"} for payload in playable_payloads[1:]]
+        result.debug["playback_payload"] = first_payload
+        result.debug["queue_payloads"] = queue_payloads
+        LOGGER.debug("Music Assistant play_media first payload: %s", first_payload)
 
         try:
-            await hass.services.async_call(domain, "play_media", playback_payload, blocking=True)
+            await hass.services.async_call(domain, "play_media", first_payload, blocking=True)
+            for payload in queue_payloads:
+                await hass.services.async_call(domain, "play_media", payload, blocking=True)
         except Exception as err:
             result.executed = False
             result.message = f"Queue preview built, but play_media failed: {err}"
             return result
 
+        playable_track = playable_tracks[0]
         result.debug["queue_payloads"] = [
-            {"track": track.name, "queued_via": "play_media_batch"}
-            for track in playable_tracks[1:]
+            {**payload, "queued_via": "play_media_add"}
+            for payload in queue_payloads
         ]
         result.executed = True
-        queued_count = max(0, len(media_ids) - 1)
+        queued_count = max(0, len(playable_payloads) - 1)
         if queued_count:
             result.message = f"Started playback on {target_player} using {playable_track.name} and queued {queued_count} more tracks."
         else:
             result.message = f"Started playback on {target_player} using {playable_track.name}."
         return result
 
-    def _build_media_id(self, track: CandidateTrack) -> str | dict[str, str] | None:
-        if track.uri:
-            return track.uri
-        if not track.item_id:
+    def _build_play_media_payload(
+        self,
+        track: CandidateTrack,
+        target_player: str,
+    ) -> dict[str, str] | None:
+        media_id = track.uri or track.item_id
+        if not media_id:
             return None
-        media_id = {
-            "media_type": track.media_type,
-            "item_id": track.item_id,
+        payload = {
+            "entity_id": target_player,
+            "media_id": media_id,
+            "media_type": track.media_type or "track",
         }
-        if track.provider:
-            media_id["provider"] = track.provider
-        return media_id
+        if not track.uri and track.provider:
+            payload["provider"] = track.provider
+        return payload

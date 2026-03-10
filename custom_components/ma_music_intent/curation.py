@@ -13,6 +13,46 @@ from .models import CandidateTrack, MusicIntent
 
 LOGGER = logging.getLogger(__name__)
 
+CURATION_TASK_RULES = [
+    "You are a candidate filter for a music queue.",
+    "You are not allowed to chat.",
+    "You are not allowed to recommend new songs.",
+    "You may only judge the provided matched candidates.",
+]
+
+CURATION_OUTPUT_RULES = [
+    "Return exactly one JSON object.",
+    "No markdown fences.",
+    "No commentary before or after JSON.",
+    "The only allowed keys are keep, drop, maybe_downrank, reasons.",
+    "keep, drop, maybe_downrank must be arrays of candidate indexes.",
+    "keep, drop, maybe_downrank are the primary fields.",
+    "Do not return song names or artist names instead of indexes.",
+    "Do not return natural-language paragraphs instead of JSON.",
+    "reasons should be a simple object mapping candidate indexes to short reasons, but may be omitted if unnecessary.",
+    "Any candidate not mentioned in drop or maybe_downrank is treated as keep.",
+    "The same candidate index must not appear in more than one of keep, drop, maybe_downrank.",
+    "Do not return example indexes. Judge the actual provided candidate list.",
+    "Prefer conservative filtering.",
+    "Only drop candidates that are clearly unsuitable.",
+    "Use maybe_downrank for weaker concerns.",
+]
+
+CURATION_REVIEW_RULES = [
+    "fit the request",
+    "avoid overly noisy tracks",
+    "avoid duplicate versions",
+    "avoid too many tracks by the same artist",
+    "avoid obvious remix/live/slowed/reverb variants unless clearly suitable",
+]
+
+CURATION_JSON_EXAMPLE = {
+    "keep": [1, 2, 5, 6],
+    "drop": [3],
+    "maybe_downrank": [4],
+    "reasons": {"3": "remix too distracting", "4": "same artist cluster"},
+}
+
 
 class CandidateCurator:
     async def curate(
@@ -44,7 +84,6 @@ class CandidateCurator:
         if mode == "off":
             return candidates, debug
 
-        light_mode = "light"
         if mode == "strong":
             debug["stage"] = "fallback_light"
             debug["failure_reason"] = "strong_not_implemented_yet"
@@ -88,6 +127,11 @@ class CandidateCurator:
             debug["failure_reason"] = "no_parseable_curation_json"
             return candidates, debug
 
+        if not self._is_valid_light_payload(payload):
+            debug["stage"] = "fallback_off" if mode == "light" else "fallback_light"
+            debug["failure_reason"] = "invalid_curation_json_shape"
+            return candidates, debug
+
         curated_candidates, apply_debug = self._apply_light_curation(
             candidates=candidates,
             playable_candidates=playable_candidates,
@@ -110,7 +154,7 @@ class CandidateCurator:
         drop_indexes = self._coerce_index_list(payload.get("drop"))
         maybe_downrank_indexes = self._coerce_index_list(payload.get("maybe_downrank"))
         keep_indexes = self._coerce_index_list(payload.get("keep"))
-        rejection_reasons = self._coerce_string_list(payload.get("reasons"))
+        rejection_reasons = self._coerce_reasons(payload.get("reasons"))
 
         dropped_keys = {
             self._candidate_identity(indexed_candidates[index])
@@ -160,18 +204,23 @@ class CandidateCurator:
                     "index": index,
                     "title": candidate.name,
                     "artist": candidate.artist,
-                    "source": candidate.provider,
+                    "flags": self._infer_flags(candidate),
                     "matched_from": candidate.metadata.get("intent_anchor")
                     or candidate.metadata.get("source_operation")
                     or "search_query",
-                    "score": round(candidate.score, 3),
-                    "flags": self._infer_flags(candidate),
                 }
             )
         return summary
 
     def _infer_flags(self, candidate: CandidateTrack) -> list[str]:
-        name = candidate.name.lower()
+        values = " ".join(
+            value
+            for value in (
+                candidate.name,
+                candidate.metadata.get("canonical_title"),
+            )
+            if isinstance(value, str)
+        ).lower()
         flags: list[str] = []
         for token, label in (
             ("remix", "remix"),
@@ -185,43 +234,58 @@ class CandidateCurator:
             ("slowed", "slowed"),
             ("reverb", "reverb"),
         ):
-            if token in name and label not in flags:
+            if token in values and label not in flags:
                 flags.append(label)
         return flags
 
     def _build_system_prompt(self) -> str:
-        return (
-            "You are reviewing a candidate music queue, not parsing intent.\n"
-            "Return one JSON object only.\n"
-            "In light mode, remove obviously bad matches, noisy or off-topic tracks, duplicate versions, remix/live/cover clutter,\n"
-            "and tracks that make the queue too repetitive.\n"
-            "Do not recommend songs outside the provided candidate list.\n"
-            'JSON schema: {"keep":[1,2], "drop":[3], "maybe_downrank":[4], "reasons":["short reason"]}'
-        )
+        sections = [
+            "\n".join(CURATION_TASK_RULES),
+            "Output rules:\n" + "\n".join(f"- {rule}" for rule in CURATION_OUTPUT_RULES),
+            "Review rules:\n" + "\n".join(f"- {rule}" for rule in CURATION_REVIEW_RULES),
+            "Example JSON:\n" + json.dumps(CURATION_JSON_EXAMPLE, ensure_ascii=False, indent=2),
+        ]
+        return "\n\n".join(sections)
 
     def _build_user_prompt(self, intent: MusicIntent, candidate_summary: list[dict[str, Any]]) -> str:
-        return json.dumps(
-            {
-                "task": "light_queue_curation",
-                "user_request": intent.prompt,
-                "intent_summary": {
-                    "count": intent.count,
-                    "mood": intent.mood,
-                    "atmosphere": intent.atmosphere,
-                    "exclude": intent.exclude,
-                    "language_preference": intent.language_preference,
-                    "freshness": intent.freshness,
-                    "familiarity": intent.familiarity,
-                    "seed_artists": intent.seed_artists[:6],
-                    "candidate_tracks": [
-                        {"title": track.name, "artist": track.artist}
-                        for track in intent.candidate_tracks[:8]
-                    ],
-                },
-                "candidates": candidate_summary,
-            },
-            ensure_ascii=False,
+        lines = [
+            "REQUEST:",
+            intent.prompt.strip(),
+            "",
+            f"COUNT: {intent.count}",
+            "",
+            "CANDIDATES:",
+        ]
+        for candidate in candidate_summary:
+            flags = ",".join(candidate["flags"]) if candidate["flags"] else "-"
+            lines.append(
+                f'{candidate["index"]}. title="{candidate["title"]}" artist="{candidate["artist"] or ""}" flags={flags}'
+            )
+        lines.extend(
+            [
+                "",
+                "Return one JSON object only.",
+                "Allowed keys: keep, drop, maybe_downrank, reasons.",
+                "Use candidate indexes only.",
+            ]
         )
+        return "\n".join(lines)
+
+    def _is_valid_light_payload(self, payload: dict[str, Any]) -> bool:
+        allowed_keys = {"keep", "drop", "maybe_downrank", "reasons"}
+        if set(payload) - allowed_keys:
+            return False
+        if not all(isinstance(payload.get(field, []), list) for field in ("keep", "drop", "maybe_downrank")):
+            return False
+
+        reasons = payload.get("reasons")
+        if reasons is None:
+            return True
+        if isinstance(reasons, str):
+            return True
+        if isinstance(reasons, list):
+            return True
+        return isinstance(reasons, dict) and all(isinstance(key, str) for key in reasons)
 
     async def _run_attempt(
         self,
@@ -359,6 +423,16 @@ class CandidateCurator:
             if isinstance(item, str) and item.strip():
                 result.append(item.strip())
         return result
+
+    def _coerce_reasons(self, value: Any) -> list[str]:
+        if isinstance(value, dict):
+            result: list[str] = []
+            for key, item in value.items():
+                if not isinstance(item, str) or not item.strip():
+                    continue
+                result.append(f"{key}: {item.strip()}")
+            return result
+        return self._coerce_string_list(value)
 
     def _candidate_identity(self, candidate: CandidateTrack) -> str:
         if candidate.uri:

@@ -7,7 +7,13 @@ from homeassistant.const import CONF_MODE
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 
-from .const import DEFAULT_CURATION_MODE, DEFAULT_MODE, DOMAIN, SERVICE_BUILD_QUEUE, SUPPORTED_CURATION_MODES
+from .const import (
+    DEFAULT_CURATION_MODE,
+    DEFAULT_MODE,
+    DOMAIN,
+    SERVICE_BUILD_QUEUE,
+    SUPPORTED_CURATION_MODES,
+)
 from .service import MusicIntentService
 
 DATA_SERVICE_REGISTERED = "service_registered"

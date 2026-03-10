@@ -74,6 +74,7 @@ class MusicIntentService:
             "message": result.message,
             "ai_agent": ai_agent,
             "strategy": result.plan.strategy,
+            "curation_mode": result.intent.curation_mode,
             "reason": result.plan.reason,
             "primary_provider": result.plan.primary_provider,
             "allow_multi_source": result.plan.allow_multi_source,

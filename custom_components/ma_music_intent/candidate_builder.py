@@ -91,12 +91,7 @@ class CandidateBuilder:
         provider: ProviderSnapshot,
         provider_plan: ProviderPlan,
     ) -> tuple[list[CandidateTrack], list[dict[str, object]]]:
-        seed_queries = list(provider_plan.seed_tracks)
-        seed_queries.extend(
-            f"{track.name} {track.artist}".strip() if track.artist else track.name
-            for track in provider_plan.candidate_tracks
-        )
-        seed_queries = [query for query in seed_queries if self._is_specific_query(query)]
+        seed_queries = self._build_seed_queries(provider_plan)
         return await self._search_queries(
             hass,
             provider,
@@ -124,7 +119,8 @@ class CandidateBuilder:
                     "provider_domain": provider.domain,
                     "operation": "provider_expand",
                     "service": provider_plan.recommendation_service,
-                    "error": "no_resolved_seed_track",
+                    "result": "skipped",
+                    "reason": "No playable seed track could be resolved from seed_tracks/seed_artists/candidate_tracks.",
                 }
             ]
 
@@ -320,6 +316,25 @@ class CandidateBuilder:
         if fallback_parts:
             return [" ".join(dict.fromkeys(fallback_parts))]
         return []
+
+    def _build_seed_queries(self, provider_plan: ProviderPlan) -> list[str]:
+        queries: list[str] = []
+        queries.extend(provider_plan.seed_tracks)
+        queries.extend(provider_plan.seed_artists)
+        queries.extend(provider_plan.candidate_artists)
+        queries.extend(
+            f"{track.name} {track.artist}".strip() if track.artist else track.name
+            for track in provider_plan.candidate_tracks
+        )
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for query in queries:
+            normalized = query.strip()
+            if not self._is_specific_query(normalized) or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+        return deduped[:8]
 
     def _is_specific_query(self, query: str) -> bool:
         normalized = query.strip()

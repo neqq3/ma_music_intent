@@ -50,7 +50,8 @@ class AIIntentParser:
         )
         conversation_error_code = self._extract_conversation_error_code(initial_response)
         initial_texts = self._collect_text_candidates(initial_response)
-        initial_payload = self._extract_json_payload(initial_response)
+        initial_payload_raw = self._extract_json_payload(initial_response)
+        initial_payload = self._normalize_payload(initial_payload_raw) if initial_payload_raw is not None else None
         ignored_conversation_error = bool(conversation_error_code and initial_payload is not None)
 
         decision_trace.append(
@@ -109,7 +110,8 @@ class AIIntentParser:
                     system_prompt=system_prompt,
                     agent_id=agent_id,
                 )
-                repair_payload = self._extract_json_payload(repair_response)
+                repair_payload_raw = self._extract_json_payload(repair_response)
+                repair_payload = self._normalize_payload(repair_payload_raw) if repair_payload_raw is not None else None
                 response_dict = repair_response
                 repair_texts = self._collect_text_candidates(repair_response)
                 response_text = repair_texts[0] if repair_texts else response_text
@@ -149,7 +151,8 @@ class AIIntentParser:
                     system_prompt=system_prompt,
                     agent_id=agent_id,
                 )
-                enrich_payload = self._extract_json_payload(enrich_response)
+                enrich_payload_raw = self._extract_json_payload(enrich_response)
+                enrich_payload = self._normalize_payload(enrich_payload_raw) if enrich_payload_raw is not None else None
                 response_dict = enrich_response
                 enrich_texts = self._collect_text_candidates(enrich_response)
                 response_text = enrich_texts[0] if enrich_texts else response_text
@@ -200,6 +203,7 @@ class AIIntentParser:
                 }
             )
 
+        payload = self._normalize_payload(payload)
         intent = self._build_intent(
             prompt=prompt,
             payload=payload,
@@ -264,34 +268,35 @@ class AIIntentParser:
         if normalized_mode not in SUPPORTED_MODES:
             normalized_mode = DEFAULT_MODE
 
+        normalized_payload = self._normalize_payload(payload)
         intent = MusicIntent(
             prompt=prompt,
-            query=self._resolve_query(prompt, payload),
-            count=self._coerce_count(payload.get("count"), count or DEFAULT_COUNT),
+            query=self._resolve_query(prompt, normalized_payload),
+            count=self._coerce_count(normalized_payload.get("count"), count or DEFAULT_COUNT),
             mode=normalized_mode,
             target_player=target_player,
-            source_scope=self._coerce_source_scope(payload.get("source_scope")),
-            allow_external_discovery=bool(payload.get("allow_external_discovery", True)),
-            language_preference=self._coerce_string_list(payload.get("language_preference")),
-            mood=self._coerce_string_list(payload.get("mood")),
-            atmosphere=self._coerce_string_list(payload.get("atmosphere")),
-            energy=self._coerce_ratio(payload.get("energy")),
-            freshness=self._coerce_ratio(payload.get("freshness")),
-            familiarity=self._coerce_ratio(payload.get("familiarity")),
-            exclude=self._coerce_string_list(payload.get("exclude")),
-            preferred_eras=self._coerce_string_list(payload.get("preferred_eras")),
-            preferred_artists=self._coerce_string_list(payload.get("preferred_artists")),
-            avoided_artists=self._coerce_string_list(payload.get("avoided_artists")),
-            seed_artists=self._coerce_string_list(payload.get("seed_artists")),
-            seed_tracks=self._coerce_string_list(payload.get("seed_tracks")),
-            candidate_tracks=self._coerce_tracks(payload.get("candidate_tracks")),
-            candidate_artists=self._coerce_string_list(payload.get("candidate_artists")),
-            keywords=self._coerce_string_list(payload.get("keywords")),
-            exploration_notes=self._coerce_string_list(payload.get("exploration_notes")),
-            provider_directions=self._coerce_string_list(payload.get("provider_directions")),
-            continuity=self._coerce_optional_string(payload.get("continuity")),
-            queue_direction=self._coerce_optional_string(payload.get("queue_direction")),
-            strategy_hint=self._coerce_optional_string(payload.get("strategy_hint")),
+            source_scope=self._coerce_source_scope(normalized_payload.get("source_scope")),
+            allow_external_discovery=bool(normalized_payload.get("allow_external_discovery", True)),
+            language_preference=self._coerce_string_list(normalized_payload.get("language_preference")),
+            mood=self._coerce_string_list(normalized_payload.get("mood")),
+            atmosphere=self._coerce_string_list(normalized_payload.get("atmosphere")),
+            energy=self._coerce_ratio(normalized_payload.get("energy")),
+            freshness=self._coerce_ratio(normalized_payload.get("freshness")),
+            familiarity=self._coerce_ratio(normalized_payload.get("familiarity")),
+            exclude=self._coerce_string_list(normalized_payload.get("exclude")),
+            preferred_eras=self._coerce_string_list(normalized_payload.get("preferred_eras")),
+            preferred_artists=self._coerce_string_list(normalized_payload.get("preferred_artists")),
+            avoided_artists=self._coerce_string_list(normalized_payload.get("avoided_artists")),
+            seed_artists=self._coerce_string_list(normalized_payload.get("seed_artists")),
+            seed_tracks=self._coerce_string_list(normalized_payload.get("seed_tracks")),
+            candidate_tracks=self._coerce_tracks(normalized_payload.get("candidate_tracks")),
+            candidate_artists=self._coerce_string_list(normalized_payload.get("candidate_artists")),
+            keywords=self._coerce_string_list(normalized_payload.get("keywords")),
+            exploration_notes=self._coerce_string_list(normalized_payload.get("exploration_notes")),
+            provider_directions=self._coerce_string_list(normalized_payload.get("provider_directions")),
+            continuity=self._coerce_optional_string(normalized_payload.get("continuity")),
+            queue_direction=self._coerce_optional_string(normalized_payload.get("queue_direction")),
+            strategy_hint=self._coerce_optional_string(normalized_payload.get("strategy_hint")),
             parse_source=parse_source,
         )
         if not intent.keywords:
@@ -335,12 +340,18 @@ class AIIntentParser:
             return []
         tracks: list[SuggestedTrack] = []
         for row in value:
+            if isinstance(row, str):
+                name, artist = self._split_track_string(row)
+                if name:
+                    tracks.append(SuggestedTrack(name=name, artist=artist))
+                continue
             if not isinstance(row, dict):
                 continue
-            name = self._coerce_optional_string(row.get("name"))
+            name = self._coerce_optional_string(row.get("name") or row.get("title"))
             if not name:
                 continue
-            tracks.append(SuggestedTrack(name=name, artist=self._coerce_optional_string(row.get("artist"))))
+            artist = self._coerce_optional_string(row.get("artist") or row.get("subtitle"))
+            tracks.append(SuggestedTrack(name=name, artist=artist))
         return tracks
 
     def _coerce_string_list(self, value: Any) -> list[str]:
@@ -350,6 +361,13 @@ class AIIntentParser:
         for item in value:
             if isinstance(item, str) and item.strip():
                 items.append(item.strip())
+                continue
+            if isinstance(item, dict):
+                candidate = self._coerce_optional_string(
+                    item.get("name") or item.get("title") or item.get("artist") or item.get("value")
+                )
+                if candidate:
+                    items.append(candidate)
         return items
 
     def _coerce_count(self, value: Any, default: int) -> int:
@@ -529,10 +547,11 @@ class AIIntentParser:
         return keywords or [prompt]
 
     def _has_sufficient_proposal(self, payload: dict[str, Any]) -> bool:
-        seed_artists = self._coerce_string_list(payload.get("seed_artists"))
-        seed_tracks = self._coerce_string_list(payload.get("seed_tracks"))
-        candidate_tracks = self._coerce_tracks(payload.get("candidate_tracks"))
-        candidate_artists = self._coerce_string_list(payload.get("candidate_artists"))
+        normalized = self._normalize_payload(payload)
+        seed_artists = self._coerce_string_list(normalized.get("seed_artists"))
+        seed_tracks = self._coerce_string_list(normalized.get("seed_tracks"))
+        candidate_tracks = self._coerce_tracks(normalized.get("candidate_tracks"))
+        candidate_artists = self._coerce_string_list(normalized.get("candidate_artists"))
         return bool(
             len(seed_artists) >= 2
             or len(candidate_tracks) >= 3
@@ -542,11 +561,153 @@ class AIIntentParser:
         )
 
     def _proposal_quality_summary(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = self._normalize_payload(payload)
         return {
-            "seed_artists": len(self._coerce_string_list(payload.get("seed_artists"))),
-            "seed_tracks": len(self._coerce_string_list(payload.get("seed_tracks"))),
-            "candidate_tracks": len(self._coerce_tracks(payload.get("candidate_tracks"))),
-            "candidate_artists": len(self._coerce_string_list(payload.get("candidate_artists"))),
-            "keywords": self._coerce_string_list(payload.get("keywords")),
-            "sufficient": self._has_sufficient_proposal(payload),
+            "seed_artists": len(self._coerce_string_list(normalized.get("seed_artists"))),
+            "seed_tracks": len(self._coerce_string_list(normalized.get("seed_tracks"))),
+            "candidate_tracks": len(self._coerce_tracks(normalized.get("candidate_tracks"))),
+            "candidate_artists": len(self._coerce_string_list(normalized.get("candidate_artists"))),
+            "keywords": self._coerce_string_list(normalized.get("keywords")),
+            "sufficient": self._has_sufficient_proposal(normalized),
         }
+
+    def _normalize_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(payload)
+        request = payload.get("recommendation_request")
+        recommendations = payload.get("concrete_recommendations")
+
+        if isinstance(request, dict):
+            normalized.setdefault("count", request.get("count"))
+            normalized.setdefault("freshness", request.get("fresh_songs_ratio"))
+            normalized.setdefault("familiarity", request.get("familiar_songs_ratio"))
+            normalized.setdefault("energy", self._map_energy_level(request.get("energy_level")))
+            normalized.setdefault(
+                "language_preference",
+                self._normalize_language_preference(request.get("language_priority")),
+            )
+            context = self._coerce_optional_string(request.get("context"))
+            if context:
+                normalized.setdefault("provider_directions", self._map_context_directions(context))
+                mood, atmosphere = self._map_context_to_intent(context)
+                if mood:
+                    normalized.setdefault("mood", mood)
+                if atmosphere:
+                    normalized.setdefault("atmosphere", atmosphere)
+
+        if isinstance(recommendations, dict):
+            for field in (
+                "seed_artists",
+                "seed_tracks",
+                "candidate_tracks",
+                "candidate_artists",
+                "keywords",
+                "exploration_notes",
+                "provider_directions",
+            ):
+                if field not in normalized and field in recommendations:
+                    normalized[field] = recommendations[field]
+
+        normalized["seed_artists"] = self._normalize_named_list(normalized.get("seed_artists"))
+        normalized["seed_tracks"] = self._normalize_track_name_list(normalized.get("seed_tracks"))
+        normalized["candidate_artists"] = self._normalize_named_list(normalized.get("candidate_artists"))
+        normalized["candidate_tracks"] = self._normalize_track_objects(normalized.get("candidate_tracks"))
+        normalized["preferred_artists"] = self._normalize_named_list(normalized.get("preferred_artists"))
+        normalized["avoided_artists"] = self._normalize_named_list(normalized.get("avoided_artists"))
+        normalized["keywords"] = self._normalize_named_list(normalized.get("keywords"))
+        normalized["exploration_notes"] = self._normalize_named_list(normalized.get("exploration_notes"))
+        normalized["provider_directions"] = self._normalize_named_list(normalized.get("provider_directions"))
+        normalized["mood"] = self._normalize_named_list(normalized.get("mood"))
+        normalized["atmosphere"] = self._normalize_named_list(normalized.get("atmosphere"))
+        normalized["exclude"] = self._normalize_named_list(normalized.get("exclude"))
+        normalized["preferred_eras"] = self._normalize_named_list(normalized.get("preferred_eras"))
+        if isinstance(normalized.get("language_preference"), str):
+            normalized["language_preference"] = self._normalize_language_preference(normalized.get("language_preference"))
+        return normalized
+
+    def _normalize_named_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        items: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                items.append(item.strip())
+            elif isinstance(item, dict):
+                candidate = self._coerce_optional_string(
+                    item.get("name") or item.get("title") or item.get("artist") or item.get("value")
+                )
+                if candidate:
+                    items.append(candidate)
+        return items
+
+    def _normalize_track_name_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        names: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                names.append(item.strip())
+            elif isinstance(item, dict):
+                candidate = self._coerce_optional_string(item.get("name") or item.get("title"))
+                if candidate:
+                    names.append(candidate)
+        return names
+
+    def _normalize_track_objects(self, value: Any) -> list[dict[str, str | None]]:
+        if not isinstance(value, list):
+            return []
+        tracks: list[dict[str, str | None]] = []
+        for item in value:
+            if isinstance(item, str):
+                name, artist = self._split_track_string(item)
+                if name:
+                    tracks.append({"name": name, "artist": artist})
+                continue
+            if not isinstance(item, dict):
+                continue
+            name = self._coerce_optional_string(item.get("name") or item.get("title"))
+            if not name:
+                continue
+            artist = self._coerce_optional_string(item.get("artist") or item.get("subtitle"))
+            tracks.append({"name": name, "artist": artist})
+        return tracks
+
+    def _split_track_string(self, value: str) -> tuple[str | None, str | None]:
+        normalized = value.strip()
+        if not normalized:
+            return None, None
+        for separator in (" - ", " – ", " — "):
+            if separator in normalized:
+                name, artist = normalized.split(separator, 1)
+                return name.strip() or None, artist.strip() or None
+        return normalized, None
+
+    def _map_energy_level(self, value: Any) -> float | None:
+        if not isinstance(value, str):
+            return self._coerce_ratio(value)
+        mapping = {"low": 0.3, "medium": 0.55, "high": 0.8}
+        return mapping.get(value.strip().lower())
+
+    def _normalize_language_preference(self, value: Any) -> list[str]:
+        if isinstance(value, list):
+            return self._normalize_named_list(value)
+        if not isinstance(value, str):
+            return []
+        lowered = value.strip().lower()
+        if lowered in {"chinese", "zh", "zh-cn", "mandarin"}:
+            return ["zh"]
+        if lowered:
+            return [lowered]
+        return []
+
+    def _map_context_directions(self, value: str) -> list[str]:
+        mapping = {
+            "coding_at_night": ["coding", "late_night"],
+            "night_coding": ["coding", "late_night"],
+        }
+        return mapping.get(value.strip().lower(), [value.strip()])
+
+    def _map_context_to_intent(self, value: str) -> tuple[list[str], list[str]]:
+        lowered = value.strip().lower()
+        if lowered in {"coding_at_night", "night_coding"}:
+            return ["focused"], ["coding", "late_night"]
+        return [], []
